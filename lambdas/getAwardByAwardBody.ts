@@ -1,6 +1,6 @@
 import { APIGatewayProxyHandlerV2 } from "aws-lambda";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, QueryCommandInput } from "@aws-sdk/lib-dynamodb";
 
 const ddbDocClient = createDdbDocClient();
 
@@ -9,6 +9,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     console.log("Event: ", JSON.stringify(event));
     const movieId = event.pathParameters?.movieId;
     const awardBody = event.pathParameters?.awardBody;
+    const minAward = event.queryStringParameters?.min;
 
     if (!movieId || !awardBody) {
       return {
@@ -20,56 +21,60 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       };
     }
 
-    const queryOutput = await ddbDocClient.send(
-      new QueryCommand({
+    let queryInput: QueryCommandInput = {
         TableName: process.env.TABLE_NAME,
         KeyConditionExpression: "movieId = :movieId AND awardBody = :awardBody",
         ExpressionAttributeValues: {
           ":movieId": movieId,
           ":awardBody": awardBody,
         },
-      })
-    );
+    };
 
-    if (!queryOutput.Items || queryOutput.Items.length === 0) {
+    if (minAward) {
+        queryInput.FilterExpression = "numAwards >= :minAward";
+    }
+  
+      const queryOutput = await ddbDocClient.send(new QueryCommand(queryInput));
+  
+      if (!queryOutput.Items || queryOutput.Items.length === 0) {
+        return {
+          statusCode: 404,
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ message: "No awards found for this movie from the specified award body" }),
+        };
+      }
+  
       return {
-        statusCode: 404,
+        statusCode: 200,
         headers: {
           "content-type": "application/json",
         },
-        body: JSON.stringify({ message: "No awards found for this movie from the specified award body" }),
+        body: JSON.stringify({ awards: queryOutput.Items }),
+      };
+    } catch (error) {
+      console.error(error);
+      return {
+        statusCode: 500,
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ error: "Failed to retrieve award information" }),
       };
     }
-
-    return {
-      statusCode: 200,
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ awards: queryOutput.Items }),
+  };
+  
+  function createDdbDocClient() {
+    const ddbClient = new DynamoDBClient({ region: process.env.REGION });
+    const marshallOptions = {
+      convertEmptyValues: true,
+      removeUndefinedValues: true,
+      convertClassInstanceToMap: true,
     };
-  } catch (error) {
-    console.error(error);
-    return {
-      statusCode: 500,
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ error: "Failed to retrieve award information" }),
+    const unmarshallOptions = {
+      wrapNumbers: false,
     };
+    const translateConfig = { marshallOptions, unmarshallOptions };
+    return DynamoDBDocumentClient.from(ddbClient, translateConfig);
   }
-};
-
-function createDdbDocClient() {
-  const ddbClient = new DynamoDBClient({ region: process.env.REGION });
-  const marshallOptions = {
-    convertEmptyValues: true,
-    removeUndefinedValues: true,
-    convertClassInstanceToMap: true,
-  };
-  const unmarshallOptions = {
-    wrapNumbers: false,
-  };
-  const translateConfig = { marshallOptions, unmarshallOptions };
-  return DynamoDBDocumentClient.from(ddbClient, translateConfig);
-}
